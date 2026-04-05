@@ -1,7 +1,5 @@
 # VM Agent — Faza 1 Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Lekki Go agent zbierający metryki hosta (CPU, RAM, disk, network) i wysyłający je do VictoriaMetrics przez plaintext API.
 
 **Architecture:** TDD-driven implementation. Każdy collector i output mają osobne pliki. Zaczynamy od interface'ów, potem testy, potem implementacja.
