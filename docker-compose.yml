@@ -1,0 +1,14 @@
+services:
+  vm-slim-agent:
+    build: .
+    container_name: vm-slim-agent
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    environment:
+      - VM_URL=http://localhost:8428
+      - HOSTNAME=Serwerek
+      - SCRAPE_INTERVAL=5s
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
