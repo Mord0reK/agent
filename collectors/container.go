@@ -26,6 +26,8 @@ type containerCgroup struct {
 	cpuPath       string
 	memPath       string
 	ioPath        string
+	netDevPath    string
+	hostNetwork   bool
 	lastCPUUsage  uint64
 	lastTime      time.Time
 }
@@ -35,6 +37,11 @@ type containerConfig struct {
 	Config          containerInnerConfig     `json:"Config"`
 	State           containerState           `json:"State"`
 	NetworkSettings containerNetworkSettings `json:"NetworkSettings"`
+	HostConfig      containerHostConfig      `json:"HostConfig"`
+}
+
+type containerHostConfig struct {
+	NetworkMode string `json:"NetworkMode"`
 }
 
 type containerInnerConfig struct {
@@ -108,6 +115,11 @@ func (c *ContainerCollector) Collect() ([]Metric, error) {
 		if err == nil {
 			metrics = append(metrics, ioMetrics...)
 		}
+
+		netMetrics, err := c.collectNetwork(cg, now)
+		if err == nil {
+			metrics = append(metrics, netMetrics...)
+		}
 	}
 
 	return metrics, nil
@@ -152,20 +164,37 @@ func (c *ContainerCollector) discoverContainers() {
 			image:         cfg.image,
 			ports:         cfg.ports,
 			running:       cfg.running,
+			hostNetwork:   cfg.hostNetwork,
 			cpuPath:       filepath.Join(match, "cpu.stat"),
 			memPath:       filepath.Join(match, "memory.current"),
 			ioPath:        filepath.Join(match, "io.stat"),
+			netDevPath:    fmt.Sprintf("/proc/%d/net/dev", firstPID(match)),
 		})
 	}
 
 	c.lastDiscover = time.Now()
 }
 
+func firstPID(cgroupPath string) int {
+	procsFile := filepath.Join(cgroupPath, "cgroup.procs")
+	data, err := os.ReadFile(procsFile)
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if pid, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
+			return pid
+		}
+	}
+	return 0
+}
+
 type parsedConfig struct {
-	name    string
-	image   string
-	ports   string
-	running bool
+	name        string
+	image       string
+	ports       string
+	running     bool
+	hostNetwork bool
 }
 
 func (c *ContainerCollector) readConfig(id string) parsedConfig {
@@ -201,10 +230,11 @@ func (c *ContainerCollector) readConfig(id string) parsedConfig {
 	ports := c.formatPorts(cfg.NetworkSettings.Ports)
 
 	return parsedConfig{
-		name:    name,
-		image:   image,
-		ports:   ports,
-		running: cfg.State.Running,
+		name:        name,
+		image:       image,
+		ports:       ports,
+		running:     cfg.State.Running,
+		hostNetwork: cfg.HostConfig.NetworkMode == "host",
 	}
 }
 
@@ -383,4 +413,78 @@ func (c *ContainerCollector) collectIO(cg *containerCgroup, now time.Time) ([]Me
 			Timestamp: now,
 		},
 	}, nil
+}
+
+func (c *ContainerCollector) collectNetwork(cg *containerCgroup, now time.Time) ([]Metric, error) {
+	if cg.hostNetwork || cg.netDevPath == "" {
+		return nil, nil
+	}
+
+	data, err := os.ReadFile(cg.netDevPath)
+	if err != nil {
+		return nil, fmt.Errorf("read network stats from %s: %w", cg.netDevPath, err)
+	}
+
+	// Truncate container ID to 12 characters safely
+	truncatedID := cg.containerID
+	if len(truncatedID) > 12 {
+		truncatedID = truncatedID[:12]
+	}
+
+	labels := map[string]string{
+		"hostname":     c.hostname,
+		"instance":     c.hostname,
+		"container":    cg.containerName,
+		"container_id": truncatedID,
+		"name":         cg.containerName,
+	}
+
+	var metrics []Metric
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.Contains(line, ":") {
+			continue
+		}
+
+		parts := strings.SplitN(line, ":", 2)
+		iface := strings.TrimSpace(parts[0])
+		if iface == "lo" {
+			continue
+		}
+
+		fields := strings.Fields(strings.TrimSpace(parts[1]))
+		if len(fields) < 9 {
+			continue
+		}
+
+		rxBytes, err := strconv.ParseUint(fields[0], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse rx bytes for interface %s: %w", iface, err)
+		}
+		txBytes, err := strconv.ParseUint(fields[8], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse tx bytes for interface %s: %w", iface, err)
+		}
+
+		ifaceLabels := make(map[string]string, len(labels)+1)
+		for k, v := range labels {
+			ifaceLabels[k] = v
+		}
+		ifaceLabels["device"] = iface
+
+		metrics = append(metrics, Metric{
+			Name:      "container_network_receive_bytes_total",
+			Labels:    ifaceLabels,
+			Value:     float64(rxBytes),
+			Timestamp: now,
+		}, Metric{
+			Name:      "container_network_transmit_bytes_total",
+			Labels:    ifaceLabels,
+			Value:     float64(txBytes),
+			Timestamp: now,
+		})
+	}
+
+	return metrics, nil
 }

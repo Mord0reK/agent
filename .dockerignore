@@ -1,0 +1,34 @@
+# Git
+.git
+.gitignore
+
+# GitHub
+.github
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation
+docs/
+README.md
+AGENTS.md
+
+# Development
+docker-compose.yml
+.env
+.env.local
+
+# Build artifacts
+vm-agent
+*.out
+
+# Tests
+*_test.go
