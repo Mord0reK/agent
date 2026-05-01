@@ -18,18 +18,20 @@ type ContainerCollector struct {
 }
 
 type containerCgroup struct {
-	containerID   string
-	containerName string
-	image         string
-	ports         string
-	running       bool
-	cpuPath       string
-	memPath       string
-	ioPath        string
-	netDevPath    string
-	hostNetwork   bool
-	lastCPUUsage  uint64
-	lastTime      time.Time
+	containerID    string
+	containerName  string
+	image          string
+	ports          string
+	running        bool
+	cpuPath        string
+	memPath        string
+	ioPath         string
+	netDevPath     string
+	hostNetwork    bool
+	composeProject string
+	composeService string
+	lastCPUUsage   uint64
+	lastTime       time.Time
 }
 
 type containerConfig struct {
@@ -38,6 +40,7 @@ type containerConfig struct {
 	State           containerState           `json:"State"`
 	NetworkSettings containerNetworkSettings `json:"NetworkSettings"`
 	HostConfig      containerHostConfig      `json:"HostConfig"`
+	Labels          map[string]string        `json:"Labels"`
 }
 
 type containerHostConfig struct {
@@ -92,14 +95,22 @@ func (c *ContainerCollector) Collect() ([]Metric, error) {
 		cg := &c.cgroups[i]
 
 		infoLabels := map[string]string{
-			"hostname":     c.hostname,
-			"instance":     c.hostname,
-			"container":    cg.containerName,
-			"container_id": cg.containerID[:12],
-			"name":         cg.containerName,
-			"image":        cg.image,
-			"ports":        cg.ports,
-			"state":        stateLabel(cg.running),
+			"hostname":        c.hostname,
+			"instance":        c.hostname,
+			"container":       cg.containerName,
+			"container_id":    cg.containerID[:12],
+			"name":            cg.containerName,
+			"image":           cg.image,
+			"ports":           cg.ports,
+			"state":           stateLabel(cg.running),
+		}
+
+		// Add docker compose labels if present
+		if cg.composeProject != "" {
+			infoLabels["compose_project"] = cg.composeProject
+		}
+		if cg.composeService != "" {
+			infoLabels["compose_service"] = cg.composeService
 		}
 		metrics = append(metrics, Metric{
 			Name:      "container_info",
@@ -166,16 +177,18 @@ func (c *ContainerCollector) discoverContainers() {
 		cfg := c.readConfig(id)
 
 		c.cgroups = append(c.cgroups, containerCgroup{
-			containerID:   id,
+			containerID:    id,
 			containerName: cfg.name,
-			image:         cfg.image,
-			ports:         cfg.ports,
-			running:       cfg.running,
-			hostNetwork:   cfg.hostNetwork,
-			cpuPath:       filepath.Join(match, "cpu.stat"),
-			memPath:       filepath.Join(match, "memory.current"),
-			ioPath:        filepath.Join(match, "io.stat"),
-			netDevPath:    fmt.Sprintf("/proc/%d/net/dev", firstPID(match)),
+			image:          cfg.image,
+			ports:          cfg.ports,
+			running:        cfg.running,
+			hostNetwork:    cfg.hostNetwork,
+			composeProject: cfg.composeProject,
+			composeService: cfg.composeService,
+			cpuPath:        filepath.Join(match, "cpu.stat"),
+			memPath:        filepath.Join(match, "memory.current"),
+			ioPath:         filepath.Join(match, "io.stat"),
+			netDevPath:     fmt.Sprintf("/proc/%d/net/dev", firstPID(match)),
 		})
 	}
 
@@ -197,11 +210,13 @@ func firstPID(cgroupPath string) int {
 }
 
 type parsedConfig struct {
-	name        string
-	image       string
-	ports       string
-	running     bool
-	hostNetwork bool
+	name            string
+	image           string
+	ports           string
+	running         bool
+	hostNetwork     bool
+	composeProject  string
+	composeService  string
 }
 
 func (c *ContainerCollector) readConfig(id string) parsedConfig {
@@ -245,12 +260,22 @@ func (c *ContainerCollector) readConfig(id string) parsedConfig {
 		}
 	}
 
+	// Extract docker compose labels
+	composeProject := ""
+	composeService := ""
+	if cfg.Labels != nil {
+		composeProject = cfg.Labels["com.docker.compose.project"]
+		composeService = cfg.Labels["com.docker.compose.service"]
+	}
+
 	return parsedConfig{
-		name:        name,
-		image:       image,
-		ports:       ports,
-		running:     cfg.State.Running,
-		hostNetwork: hostNetwork,
+		name:            name,
+		image:           image,
+		ports:           ports,
+		running:         cfg.State.Running,
+		hostNetwork:     hostNetwork,
+		composeProject:  composeProject,
+		composeService:  composeService,
 	}
 }
 
@@ -376,6 +401,12 @@ func (c *ContainerCollector) collectMemory(cg *containerCgroup, now time.Time) (
 		"container_id": cg.containerID[:12],
 		"name":         cg.containerName,
 	}
+	if cg.composeProject != "" {
+		labels["compose_project"] = cg.composeProject
+	}
+	if cg.composeService != "" {
+		labels["compose_service"] = cg.composeService
+	}
 
 	return []Metric{
 		{
@@ -414,6 +445,12 @@ func (c *ContainerCollector) collectIO(cg *containerCgroup, now time.Time) ([]Me
 		"container_id": cg.containerID[:12],
 		"name":         cg.containerName,
 	}
+	if cg.composeProject != "" {
+		labels["compose_project"] = cg.composeProject
+	}
+	if cg.composeService != "" {
+		labels["compose_service"] = cg.composeService
+	}
 
 	return []Metric{
 		{
@@ -451,12 +488,18 @@ func (c *ContainerCollector) collectNetwork(cg *containerCgroup, now time.Time) 
 		truncatedID = truncatedID[:12]
 	}
 
-	labels := map[string]string{
+labels := map[string]string{
 		"hostname":     c.hostname,
 		"instance":     c.hostname,
 		"container":    cg.containerName,
-		"container_id": truncatedID,
+		"container_id": cg.containerID[:12],
 		"name":         cg.containerName,
+	}
+	if cg.composeProject != "" {
+		labels["compose_project"] = cg.composeProject
+	}
+	if cg.composeService != "" {
+		labels["compose_service"] = cg.composeService
 	}
 
 	var metrics []Metric
