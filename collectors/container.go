@@ -53,7 +53,14 @@ type containerState struct {
 }
 
 type containerNetworkSettings struct {
-	Ports map[string][]containerPortBinding `json:"Ports"`
+	Ports    map[string][]containerPortBinding `json:"Ports"`
+	Networks map[string]networkInfo `json:"Networks"`
+}
+
+type networkInfo struct {
+	Gateway    string `json:"Gateway"`
+	IPAddress  string `json:"IPAddress"`
+	MacAddress string `json:"MacAddress"`
 }
 
 type containerPortBinding struct {
@@ -229,12 +236,21 @@ func (c *ContainerCollector) readConfig(id string) parsedConfig {
 
 	ports := c.formatPorts(cfg.NetworkSettings.Ports)
 
+	// Detect host network mode by checking if "host" network exists in Networks
+	// (HostConfig.NetworkMode is often null in config.v2.json)
+	hostNetwork := false
+	if cfg.NetworkSettings.Networks != nil {
+		if _, ok := cfg.NetworkSettings.Networks["host"]; ok {
+			hostNetwork = true
+		}
+	}
+
 	return parsedConfig{
 		name:        name,
 		image:       image,
 		ports:       ports,
 		running:     cfg.State.Running,
-		hostNetwork: cfg.HostConfig.NetworkMode == "host",
+		hostNetwork: hostNetwork,
 	}
 }
 
@@ -416,7 +432,11 @@ func (c *ContainerCollector) collectIO(cg *containerCgroup, now time.Time) ([]Me
 }
 
 func (c *ContainerCollector) collectNetwork(cg *containerCgroup, now time.Time) ([]Metric, error) {
-	if cg.hostNetwork || cg.netDevPath == "" {
+	// Skip containers with host network mode - they share host's network namespace
+	if cg.hostNetwork {
+		return nil, nil
+	}
+	if cg.netDevPath == "" {
 		return nil, nil
 	}
 
