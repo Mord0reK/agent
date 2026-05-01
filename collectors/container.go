@@ -40,7 +40,6 @@ type containerConfig struct {
 	State           containerState           `json:"State"`
 	NetworkSettings containerNetworkSettings `json:"NetworkSettings"`
 	HostConfig      containerHostConfig      `json:"HostConfig"`
-	Labels          map[string]string        `json:"Labels"`
 }
 
 type containerHostConfig struct {
@@ -48,7 +47,8 @@ type containerHostConfig struct {
 }
 
 type containerInnerConfig struct {
-	Image string `json:"Image"`
+	Image  string            `json:"Image"`
+	Labels map[string]string `json:"Labels"`
 }
 
 type containerState struct {
@@ -263,9 +263,9 @@ func (c *ContainerCollector) readConfig(id string) parsedConfig {
 	// Extract docker compose labels
 	composeProject := ""
 	composeService := ""
-	if cfg.Labels != nil {
-		composeProject = cfg.Labels["com.docker.compose.project"]
-		composeService = cfg.Labels["com.docker.compose.service"]
+	if cfg.Config.Labels != nil {
+		composeProject = cfg.Config.Labels["com.docker.compose.project"]
+		composeService = cfg.Config.Labels["com.docker.compose.service"]
 	}
 
 	return parsedConfig{
