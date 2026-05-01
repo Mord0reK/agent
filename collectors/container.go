@@ -332,6 +332,12 @@ func (c *ContainerCollector) collectCPU(cg *containerCgroup, now time.Time) ([]M
 		"container_id": cg.containerID[:12],
 		"name":         cg.containerName,
 	}
+	if cg.composeProject != "" {
+		labels["compose_project"] = cg.composeProject
+	}
+	if cg.composeService != "" {
+		labels["compose_service"] = cg.composeService
+	}
 
 	metrics := make([]Metric, 0, 3)
 
