@@ -53,7 +53,11 @@ func (c *JournaldCollector) Collect() ([]Entry, error) {
 	cmd := exec.Command("journalctl", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// If output is empty, it's a real error
+		// Exit status 1 means "no entries found" - not a real error
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return nil, nil
+		}
+		// If output is empty (other error), it's a real error
 		if len(out) == 0 {
 			return nil, fmt.Errorf("journalctl failed for unit %q: %v", c.unit, err)
 		}
