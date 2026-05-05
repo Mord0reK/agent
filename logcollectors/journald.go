@@ -36,15 +36,16 @@ func (c *JournaldCollector) Collect() ([]Entry, error) {
 		return nil, fmt.Errorf("journalctl not available: %w", err)
 	}
 
-	// Check if journal storage is accessible
-	if _, err := os.Stat("/var/log/journal"); os.IsNotExist(err) {
-		if _, err := os.Stat("/run/log/journal"); os.IsNotExist(err) {
-			return nil, fmt.Errorf("journal storage not accessible (neither /var/log/journal nor /run/log/journal found)")
-		}
-	}
-
 	cursorFile := filepath.Join(c.stateDir, sanitizeFileName(c.unit)+".cursor")
-	args := []string{"--no-pager", "--output=json", "--unit=" + c.unit, "--cursor-file=" + cursorFile}
+	args := []string{"--no-pager", "--output=json", "--unit=" + c.unit}
+	
+	// Use -D flag to read from host journal if available (in container, host journal is usually mounted elsewhere)
+	if _, err := os.Stat("/host/journal"); err == nil {
+		args = append(args, "-D", "/host/journal")
+	}
+	
+	args = append(args, "--cursor-file="+cursorFile)
+	
 	if _, err := os.Stat(cursorFile); os.IsNotExist(err) {
 		args = append(args, "--since=now")
 	}
@@ -52,10 +53,11 @@ func (c *JournaldCollector) Collect() ([]Entry, error) {
 	cmd := exec.Command("journalctl", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// If output contains data, try to parse it (journalctl might return partial data with error)
+		// If output is empty, it's a real error
 		if len(out) == 0 {
-			return nil, fmt.Errorf("journalctl failed for unit %q: %v (stderr: %s)", c.unit, err, string(out))
+			return nil, fmt.Errorf("journalctl failed for unit %q: %v", c.unit, err)
 		}
+		// Otherwise try to parse what we got
 	}
 
 	var entries []Entry
