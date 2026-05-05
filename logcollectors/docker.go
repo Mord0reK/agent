@@ -11,13 +11,17 @@ import (
 	"time"
 )
 
+type containerState struct {
+	id     string
+	name   string
+	offset int64
+}
+
 type DockerCollector struct {
-	hostname    string
-	container   string
-	containerID string
-	logPath     string
-	offset      int64
-	resolved    bool
+	hostname   string
+	pattern    string
+	containers map[string]*containerState
+	resolved   bool
 }
 
 type dockerJSONLine struct {
@@ -26,11 +30,20 @@ type dockerJSONLine struct {
 	Stream string `json:"stream"`
 }
 
-func NewDockerCollector(hostname, container string) *DockerCollector {
-	return &DockerCollector{hostname: hostname, container: container}
+func NewDockerCollector(hostname, pattern string) *DockerCollector {
+	return &DockerCollector{
+		hostname:   hostname,
+		pattern:    pattern,
+		containers: make(map[string]*containerState),
+	}
 }
 
 func (c *DockerCollector) Name() string { return "docker" }
+
+// isWildcard checks if pattern contains glob characters
+func isWildcard(pattern string) bool {
+	return strings.Contains(pattern, "*") || strings.Contains(pattern, "?")
+}
 
 func (c *DockerCollector) resolve() error {
 	if c.resolved {
@@ -41,6 +54,9 @@ func (c *DockerCollector) resolve() error {
 	if err != nil {
 		return err
 	}
+
+	foundAny := false
+	useWildcard := isWildcard(c.pattern)
 
 	for _, path := range matches {
 		data, err := os.ReadFile(path)
@@ -54,20 +70,44 @@ func (c *DockerCollector) resolve() error {
 			continue
 		}
 		name := strings.TrimPrefix(cfg.Name, "/")
-		if name != c.container {
+
+		// Check if name matches pattern
+		var matches bool
+		if useWildcard {
+			matches, _ = filepath.Match(c.pattern, name)
+		} else {
+			matches = (name == c.pattern)
+		}
+
+		if !matches {
 			continue
 		}
+
 		id := filepath.Base(filepath.Dir(path))
-		c.containerID = id
-		c.logPath = filepath.Join("/var/lib/docker/containers", id, fmt.Sprintf("%s-json.log", id))
-		if st, err := os.Stat(c.logPath); err == nil {
-			c.offset = st.Size()
+		logPath := filepath.Join("/var/lib/docker/containers", id, fmt.Sprintf("%s-json.log", id))
+
+		offset := int64(0)
+		if st, err := os.Stat(logPath); err == nil {
+			offset = st.Size()
 		}
-		c.resolved = true
-		return nil
+
+		c.containers[name] = &containerState{
+			id:     id,
+			name:   name,
+			offset: offset,
+		}
+		foundAny = true
 	}
 
-	return fmt.Errorf("container %q not found", c.container)
+	if !foundAny {
+		if useWildcard {
+			return fmt.Errorf("no containers matching pattern %q", c.pattern)
+		}
+		return fmt.Errorf("container %q not found", c.pattern)
+	}
+
+	c.resolved = true
+	return nil
 }
 
 func (c *DockerCollector) Collect() ([]Entry, error) {
@@ -75,66 +115,76 @@ func (c *DockerCollector) Collect() ([]Entry, error) {
 		return nil, err
 	}
 
-	f, err := os.Open(c.logPath)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	st, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if st.Size() < c.offset {
-		c.offset = 0
-	}
-
-	if _, err := f.Seek(c.offset, io.SeekStart); err != nil {
-		return nil, err
-	}
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
 	var out []Entry
-	for scanner.Scan() {
-		var line dockerJSONLine
-		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
-			continue
-		}
-		msg := strings.TrimRight(line.Log, "\n")
-		if msg == "" {
-			continue
-		}
 
-		ts, err := time.Parse(time.RFC3339Nano, line.Time)
+	for _, cs := range c.containers {
+		logPath := filepath.Join("/var/lib/docker/containers", cs.id, fmt.Sprintf("%s-json.log", cs.id))
+
+		f, err := os.Open(logPath)
 		if err != nil {
-			ts = time.Now()
+			continue
 		}
 
-		out = append(out, Entry{
-			Timestamp: ts,
-			Message:   msg,
-			Labels: map[string]string{
-				"instance":  c.hostname,
-				"hostname":  c.hostname,
-				"container": c.container,
-				"source":    "docker",
-			},
-			Fields: map[string]string{
-				"container_id": c.containerID,
-				"stream":       line.Stream,
-			},
-		})
-	}
+		st, err := f.Stat()
+		if err != nil {
+			f.Close()
+			continue
+		}
 
-	if err := scanner.Err(); err != nil {
-		return out, err
-	}
+		if st.Size() < cs.offset {
+			cs.offset = 0
+		}
 
-	pos, err := f.Seek(0, io.SeekCurrent)
-	if err == nil {
-		c.offset = pos
+		if _, err := f.Seek(cs.offset, io.SeekStart); err != nil {
+			f.Close()
+			continue
+		}
+
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+		for scanner.Scan() {
+			var line dockerJSONLine
+			if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
+				continue
+			}
+			msg := strings.TrimRight(line.Log, "\n")
+			if msg == "" {
+				continue
+			}
+
+			ts, err := time.Parse(time.RFC3339Nano, line.Time)
+			if err != nil {
+				ts = time.Now()
+			}
+
+			out = append(out, Entry{
+				Timestamp: ts,
+				Message:   msg,
+				Labels: map[string]string{
+					"instance":  c.hostname,
+					"hostname":  c.hostname,
+					"container": cs.name,
+					"source":    "docker",
+				},
+				Fields: map[string]string{
+					"container_id": cs.id,
+					"stream":       line.Stream,
+				},
+			})
+		}
+
+		if err := scanner.Err(); err != nil {
+			f.Close()
+			continue
+		}
+
+		pos, err := f.Seek(0, io.SeekCurrent)
+		if err == nil {
+			cs.offset = pos
+		}
+
+		f.Close()
 	}
 
 	return out, nil
