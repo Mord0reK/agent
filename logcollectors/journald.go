@@ -31,6 +31,18 @@ func (c *JournaldCollector) Collect() ([]Entry, error) {
 		return nil, fmt.Errorf("create journal state dir: %w", err)
 	}
 
+	// Check if journalctl is available
+	if _, err := exec.LookPath("journalctl"); err != nil {
+		return nil, fmt.Errorf("journalctl not available: %w", err)
+	}
+
+	// Check if journal storage is accessible
+	if _, err := os.Stat("/var/log/journal"); os.IsNotExist(err) {
+		if _, err := os.Stat("/run/log/journal"); os.IsNotExist(err) {
+			return nil, fmt.Errorf("journal storage not accessible (neither /var/log/journal nor /run/log/journal found)")
+		}
+	}
+
 	cursorFile := filepath.Join(c.stateDir, sanitizeFileName(c.unit)+".cursor")
 	args := []string{"--no-pager", "--output=json", "--unit=" + c.unit, "--cursor-file=" + cursorFile}
 	if _, err := os.Stat(cursorFile); os.IsNotExist(err) {
@@ -38,9 +50,12 @@ func (c *JournaldCollector) Collect() ([]Entry, error) {
 	}
 
 	cmd := exec.Command("journalctl", args...)
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("run journalctl: %w", err)
+		// If output contains data, try to parse it (journalctl might return partial data with error)
+		if len(out) == 0 {
+			return nil, fmt.Errorf("journalctl failed for unit %q: %v (stderr: %s)", c.unit, err, string(out))
+		}
 	}
 
 	var entries []Entry
