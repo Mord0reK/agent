@@ -9,6 +9,15 @@ services:
       - VM_URL=http://localhost:8428
       - HOSTNAME=Serwerek
       - SCRAPE_INTERVAL=5s
+      - LOGS_CONFIG_FILE=/config/agent/logs.yaml
+      - LOGS_BACKEND_URL=http://localhost:9428
+      - LOGS_STATE_DIR=/state/logs
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /run/systemd/journal:/run/systemd/journal:ro
+      - ./config/agent:/config/agent:ro
+      - ./state/logs:/state/logs
+

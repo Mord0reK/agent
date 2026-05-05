@@ -57,7 +57,7 @@ type containerState struct {
 
 type containerNetworkSettings struct {
 	Ports    map[string][]containerPortBinding `json:"Ports"`
-	Networks map[string]networkInfo `json:"Networks"`
+	Networks map[string]networkInfo            `json:"Networks"`
 }
 
 type networkInfo struct {
@@ -95,14 +95,14 @@ func (c *ContainerCollector) Collect() ([]Metric, error) {
 		cg := &c.cgroups[i]
 
 		infoLabels := map[string]string{
-			"hostname":        c.hostname,
-			"instance":        c.hostname,
-			"container":       cg.containerName,
-			"container_id":    cg.containerID[:12],
-			"name":            cg.containerName,
-			"image":           cg.image,
-			"ports":           cg.ports,
-			"state":           stateLabel(cg.running),
+			"hostname":     c.hostname,
+			"instance":     c.hostname,
+			"container":    cg.containerName,
+			"container_id": shortContainerID(cg.containerID),
+			"name":         cg.containerName,
+			"image":        cg.image,
+			"ports":        cg.ports,
+			"state":        stateLabel(cg.running),
 		}
 
 		// Add docker compose labels if present
@@ -178,7 +178,7 @@ func (c *ContainerCollector) discoverContainers() {
 
 		c.cgroups = append(c.cgroups, containerCgroup{
 			containerID:    id,
-			containerName: cfg.name,
+			containerName:  cfg.name,
 			image:          cfg.image,
 			ports:          cfg.ports,
 			running:        cfg.running,
@@ -210,13 +210,13 @@ func firstPID(cgroupPath string) int {
 }
 
 type parsedConfig struct {
-	name            string
-	image           string
-	ports           string
-	running         bool
-	hostNetwork     bool
-	composeProject  string
-	composeService  string
+	name           string
+	image          string
+	ports          string
+	running        bool
+	hostNetwork    bool
+	composeProject string
+	composeService string
 }
 
 func (c *ContainerCollector) readConfig(id string) parsedConfig {
@@ -269,13 +269,13 @@ func (c *ContainerCollector) readConfig(id string) parsedConfig {
 	}
 
 	return parsedConfig{
-		name:            name,
-		image:           image,
-		ports:           ports,
-		running:         cfg.State.Running,
-		hostNetwork:     hostNetwork,
-		composeProject:  composeProject,
-		composeService:  composeService,
+		name:           name,
+		image:          image,
+		ports:          ports,
+		running:        cfg.State.Running,
+		hostNetwork:    hostNetwork,
+		composeProject: composeProject,
+		composeService: composeService,
 	}
 }
 
@@ -307,6 +307,13 @@ func (c *ContainerCollector) formatPorts(ports map[string][]containerPortBinding
 	return strings.Join(parts, ",")
 }
 
+func shortContainerID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
+}
+
 func (c *ContainerCollector) collectCPU(cg *containerCgroup, now time.Time) ([]Metric, error) {
 	data, err := os.ReadFile(cg.cpuPath)
 	if err != nil {
@@ -329,7 +336,7 @@ func (c *ContainerCollector) collectCPU(cg *containerCgroup, now time.Time) ([]M
 		"hostname":     c.hostname,
 		"instance":     c.hostname,
 		"container":    cg.containerName,
-		"container_id": cg.containerID[:12],
+		"container_id": shortContainerID(cg.containerID),
 		"name":         cg.containerName,
 	}
 	if cg.composeProject != "" {
@@ -404,7 +411,7 @@ func (c *ContainerCollector) collectMemory(cg *containerCgroup, now time.Time) (
 		"hostname":     c.hostname,
 		"instance":     c.hostname,
 		"container":    cg.containerName,
-		"container_id": cg.containerID[:12],
+		"container_id": shortContainerID(cg.containerID),
 		"name":         cg.containerName,
 	}
 	if cg.composeProject != "" {
@@ -448,7 +455,7 @@ func (c *ContainerCollector) collectIO(cg *containerCgroup, now time.Time) ([]Me
 		"hostname":     c.hostname,
 		"instance":     c.hostname,
 		"container":    cg.containerName,
-		"container_id": cg.containerID[:12],
+		"container_id": shortContainerID(cg.containerID),
 		"name":         cg.containerName,
 	}
 	if cg.composeProject != "" {
@@ -488,17 +495,11 @@ func (c *ContainerCollector) collectNetwork(cg *containerCgroup, now time.Time) 
 		return nil, fmt.Errorf("read network stats from %s: %w", cg.netDevPath, err)
 	}
 
-	// Truncate container ID to 12 characters safely
-	truncatedID := cg.containerID
-	if len(truncatedID) > 12 {
-		truncatedID = truncatedID[:12]
-	}
-
-labels := map[string]string{
+	labels := map[string]string{
 		"hostname":     c.hostname,
 		"instance":     c.hostname,
 		"container":    cg.containerName,
-		"container_id": cg.containerID[:12],
+		"container_id": shortContainerID(cg.containerID),
 		"name":         cg.containerName,
 	}
 	if cg.composeProject != "" {
