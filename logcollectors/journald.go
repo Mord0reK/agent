@@ -47,7 +47,10 @@ func (c *JournaldCollector) Collect() ([]Entry, error) {
 	args = append(args, "--cursor-file="+cursorFile)
 	
 	if _, err := os.Stat(cursorFile); os.IsNotExist(err) {
-		args = append(args, "--since=now")
+		// No cursor file yet — read the last hour to bootstrap.
+		// Using --since=now would result in zero entries if no SSH activity
+		// at this exact moment, preventing journalctl from creating the cursor file.
+		args = append(args, "--since=-1h")
 	}
 
 	cmd := exec.Command("journalctl", args...)
