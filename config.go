@@ -13,6 +13,8 @@ type Config struct {
 	ScrapeInterval time.Duration
 	Hostname       string
 	Logs           *LogsConfig
+	LogsBackendURL string
+	LogsStateDir   string
 }
 
 type LogsConfig struct {
@@ -54,24 +56,26 @@ func LoadConfig() (*Config, error) {
 	}
 
 	var logsCfg *LogsConfig
+	var logsBackendURL string
+	logsStateDir := os.Getenv("LOGS_STATE_DIR")
+	if logsStateDir == "" {
+		logsStateDir = "/tmp/vm-slim-agent"
+	}
+
 	if path := os.Getenv("LOGS_CONFIG_FILE"); path != "" {
-		backendURL := os.Getenv("LOGS_BACKEND_URL")
-		if backendURL == "" {
+		logsBackendURL = os.Getenv("LOGS_BACKEND_URL")
+		if logsBackendURL == "" {
 			return nil, fmt.Errorf("LOGS_BACKEND_URL environment variable is required when LOGS_CONFIG_FILE is set")
 		}
-		stateDir := os.Getenv("LOGS_STATE_DIR")
 
 		cfg, err := LoadLogsConfig(path)
 		if err != nil {
 			return nil, err
 		}
-		// Attach env vars to config
 		logsCfg = &LogsConfig{
 			Journald: cfg.Journald,
 			Docker:   cfg.Docker,
 		}
-		_ = backendURL // stored in a separate place for now
-		_ = stateDir   // stored in a separate place for now
 	}
 
 	return &Config{
@@ -79,6 +83,8 @@ func LoadConfig() (*Config, error) {
 		ScrapeInterval: interval,
 		Hostname:       hostname,
 		Logs:           logsCfg,
+		LogsBackendURL: logsBackendURL,
+		LogsStateDir:   logsStateDir,
 	}, nil
 }
 

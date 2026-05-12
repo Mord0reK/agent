@@ -9,7 +9,8 @@ Lightweight Go agent collecting host and Docker container metrics, sending them 
 - **Go 1.24.4**, module `vm-slim-agent`
 - **gopsutil/v3** — host metrics (CPU, memory, disk, network)
 - **cgroups v2** — container metrics (no Docker API)
-- **VictoriaMetrics** `/api/v1/import/prometheus` — plaintext output
+- **VictoriaMetrics** `/api/v1/import/prometheus` — plaintext output (metrics)
+- **VictoriaLogs** `/insert/loki/api/v1/push` — Loki-compatible push API (logs, optional)
 - **Docker** — multi-stage build, `scratch` final image, `CGO_ENABLED=0`
 
 ## Project structure
@@ -23,8 +24,13 @@ vm-slim-agent/
 │   ├── disk.go         # Filesystem metrics (node_filesystem_*_bytes)
 │   ├── network.go      # Network I/O (label: device, not interface)
 │   └── container.go    # Container metrics via cgroups v2 + config.v2.json
+├── logcollectors/
+│   ├── collector.go    # Log Entry struct, Collector interface
+│   ├── journald.go     # journald log collector (via journalctl --output=json)
+│   └── docker.go       # Docker JSON-file log collector (reads -json.log files)
 ├── output/
-│   └── vm.go           # VM plaintext output with exponential backoff retry
+│   ├── vm.go           # VM plaintext output with exponential backoff retry
+│   └── vlogs.go        # VictoriaLogs Loki-compatible push with retry
 ├── config.go           # Env vars: VM_URL (required), SCRAPE_INTERVAL (5s), HOSTNAME
 ├── main.go             # Ticker loop: collect → batch → send
 ├── docker-compose.yml  # Recommended deployment
@@ -63,6 +69,59 @@ type Metric struct {
 - Reads `/var/lib/docker/containers/<id>/config.v2.json` for name, image, ports, state
 - No Docker API calls — pure filesystem reads
 
+### Log collectors
+
+Optional subsystem for collecting logs and sending them to VictoriaLogs.
+
+#### Log Collector interface
+
+```go
+type Collector interface {
+    Name() string
+    Collect() ([]Entry, error)
+}
+
+type Entry struct {
+    Timestamp time.Time
+    Message   string
+    Labels    map[string]string
+    Fields    map[string]string
+}
+```
+
+#### Sources
+
+Configured via YAML file (`LOGS_CONFIG_FILE`, see Config below):
+
+```yaml
+journald:
+  - unit: ssh.service
+  - unit: nginx.service
+docker:
+  - container: app-web
+  - container: app-api
+  - container: redis-*     # glob patterns supported
+```
+
+- **journald**: invokes `journalctl --output=json --unit=<unit>` with cursor tracking. Falls back to `time.Now()` if timestamp parsing fails.
+- **Docker**: reads `/var/lib/docker/containers/<id>/<id>-json.log` files. Resolves container IDs from `config.v2.json` by name. Supports exact name match and glob patterns (`*`, `?`).
+
+#### Offset tracking (Docker logs)
+
+Docker collector tracks byte offset per container to read only new log data each cycle:
+
+1. On each `Collect()` call, stats the log file to get current size
+2. If file was truncated (log rotation), resets offset to 0
+3. Reads all new data (offset → fileSize) into memory, capped at 50MB/cycle
+4. Splits data into complete lines (drops trailing incomplete line for next cycle)
+5. Uses a custom `lineScanner` (not `bufio.Scanner`) to avoid `ErrTooLong` infinite retry loops
+6. Advances offset by bytes of successfully processed lines
+7. On scanner error: still advances past processed data to prevent getting stuck
+
+#### Output: VLogsOutput
+
+Sends log entries to VictoriaLogs via `/insert/loki/api/v1/push` (Loki-compatible push API). Groups entries by label set into Loki streams. Implements retry with exponential backoff (3 attempts), matching the pattern used by `VMOutput` for metrics.
+
 ### Config
 
 | Env | Default | Required |
@@ -70,6 +129,9 @@ type Metric struct {
 | `VM_URL` | — | Yes |
 | `SCRAPE_INTERVAL` | `5s` | No |
 | `HOSTNAME` | `os.Hostname()` | No |
+| `LOGS_CONFIG_FILE` | — | No (enables logs) |
+| `LOGS_BACKEND_URL` | — | Yes (if LOGS_CONFIG_FILE set) |
+| `LOGS_STATE_DIR` | `/tmp/vm-slim-agent` | No |
 
 ## Testing
 

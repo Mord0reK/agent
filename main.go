@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"os"
 	"time"
 
 	"vm-slim-agent/collectors"
@@ -31,25 +30,23 @@ func main() {
 	// Setup logs collection (optional)
 	var logCollectors []logcollectors.Collector
 	var logsOut *output.VLogsOutput
-	
+
 	if cfg.Logs != nil {
-		backendURL := os.Getenv("LOGS_BACKEND_URL")
-		stateDir := os.Getenv("LOGS_STATE_DIR")
-		if stateDir == "" {
-			stateDir = "/tmp/vm-slim-agent"
+		if cfg.LogsBackendURL == "" {
+			log.Fatalf("LOGS_BACKEND_URL environment variable is required when LOGS_CONFIG_FILE is set")
 		}
-		
-		logsOut = output.NewVLogsOutput(backendURL)
-		
+
+		logsOut = output.NewVLogsOutput(cfg.LogsBackendURL)
+
 		for _, src := range cfg.Logs.Journald {
-			logCollectors = append(logCollectors, logcollectors.NewJournaldCollector(cfg.Hostname, src.Unit, stateDir))
+			logCollectors = append(logCollectors, logcollectors.NewJournaldCollector(cfg.Hostname, src.Unit, cfg.LogsStateDir))
 		}
 		for _, src := range cfg.Logs.Docker {
 			logCollectors = append(logCollectors, logcollectors.NewDockerCollector(cfg.Hostname, src.Container))
 		}
-		
+
 		if len(logCollectors) > 0 {
-			log.Printf("Logs enabled (%d sources, backend=%s, state_dir=%s)", len(logCollectors), backendURL, stateDir)
+			log.Printf("Logs enabled (%d sources, backend=%s, state_dir=%s)", len(logCollectors), cfg.LogsBackendURL, cfg.LogsStateDir)
 		}
 	}
 

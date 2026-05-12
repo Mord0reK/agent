@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -12,15 +14,19 @@ import (
 	"vm-slim-agent/logcollectors"
 )
 
+const vlogsMaxRetries = 3
+
 type VLogsOutput struct {
-	baseURL string
-	client  *http.Client
+	baseURL    string
+	client     *http.Client
+	maxRetries int
 }
 
 func NewVLogsOutput(baseURL string) *VLogsOutput {
 	return &VLogsOutput{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		client:  &http.Client{Timeout: 30 * time.Second},
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		client:     &http.Client{Timeout: 30 * time.Second},
+		maxRetries: vlogsMaxRetries,
 	}
 }
 
@@ -64,23 +70,42 @@ func (o *VLogsOutput) Send(entries []logcollectors.Entry) error {
 	}
 
 	url := o.baseURL + "/insert/loki/api/v1/push"
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := o.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+	var lastErr error
+	for attempt := 0; attempt < o.maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt*attempt) * time.Second
+			log.Printf("vlogs retry %d/%d after %v", attempt, o.maxRetries, backoff)
+			time.Sleep(backoff)
+		}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := o.client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("request failed: %w", err)
+			continue
+		}
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			return nil
+		}
+
+		// Read error body for diagnostics
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+
+		lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(errBody)))
 	}
 
-	return nil
+	return fmt.Errorf("failed to send logs after %d attempts: %w", o.maxRetries, lastErr)
 }
 
 func labelsKey(labels map[string]string) string {

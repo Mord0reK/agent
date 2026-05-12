@@ -1,7 +1,7 @@
 package logcollectors
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -120,7 +120,7 @@ func (c *DockerCollector) Collect() ([]Entry, error) {
 	for _, cs := range c.containers {
 		logPath := filepath.Join("/var/lib/docker/containers", cs.id, fmt.Sprintf("%s-json.log", cs.id))
 
-		f, err := os.Open(logPath)
+		f, err := os.OpenFile(logPath, os.O_RDONLY, 0)
 		if err != nil {
 			continue
 		}
@@ -131,18 +131,60 @@ func (c *DockerCollector) Collect() ([]Entry, error) {
 			continue
 		}
 
-		if st.Size() < cs.offset {
+		fileSize := st.Size()
+
+		// If file was truncated (log rotation), start from beginning
+		if fileSize < cs.offset {
 			cs.offset = 0
 		}
 
-		if _, err := f.Seek(cs.offset, io.SeekStart); err != nil {
+		// Nothing new since last collect
+		if fileSize <= cs.offset {
 			f.Close()
 			continue
 		}
 
-		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		// Read all new data from offset to end of file
+		// Safety limit: max 50MB per cycle
+		remaining := fileSize - cs.offset
+		if remaining > 50*1024*1024 {
+			remaining = 50 * 1024 * 1024
+		}
 
+		// Read full new data into memory
+		data := make([]byte, remaining)
+		n, err := f.ReadAt(data, cs.offset)
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			f.Close()
+			continue
+		}
+		data = data[:n] // trim to actual bytes read
+		f.Close()
+
+		if len(data) == 0 {
+			continue
+		}
+
+		// Drop trailing incomplete line (data may end without newline)
+		// — it will be picked up in the next cycle after more data is appended
+		dataLen := len(data)
+		if dataLen > 0 && data[dataLen-1] != '\n' {
+			lastNewline := bytes.LastIndexByte(data, '\n')
+			if lastNewline < 0 {
+				// No complete line at all, keep old offset
+				continue
+			}
+			// Truncate to last complete line, leave the rest for next cycle
+			dataLen = lastNewline + 1
+			data = data[:dataLen]
+		}
+
+		if dataLen == 0 {
+			continue
+		}
+
+		// Process complete lines
+		scanner := NewLineScanner(data)
 		for scanner.Scan() {
 			var line dockerJSONLine
 			if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
@@ -175,17 +217,55 @@ func (c *DockerCollector) Collect() ([]Entry, error) {
 		}
 
 		if err := scanner.Err(); err != nil {
-			f.Close()
+			// If there was an error (e.g., line too long), we still advance
+			// past the data we read to avoid infinite retry loops.
+			cs.offset += int64(dataLen)
 			continue
 		}
 
-		pos, err := f.Seek(0, io.SeekCurrent)
-		if err == nil {
-			cs.offset = pos
-		}
-
-		f.Close()
+		// Successfully processed all data — advance offset
+		cs.offset += int64(dataLen)
 	}
 
 	return out, nil
+}
+
+// lineScanner is a simple line-based scanner that handles long lines gracefully.
+// Unlike bufio.Scanner, it doesn't stop on ErrTooLong — it skips the long line and continues.
+type lineScanner struct {
+	data   []byte
+	pos    int
+	line   []byte
+	err    error
+}
+
+func NewLineScanner(data []byte) *lineScanner {
+	return &lineScanner{data: data}
+}
+
+func (s *lineScanner) Scan() bool {
+	if s.err != nil || s.pos >= len(s.data) {
+		return false
+	}
+
+	// Find next newline
+	end := bytes.IndexByte(s.data[s.pos:], '\n')
+	if end < 0 {
+		// Last line without newline — still process it
+		s.line = s.data[s.pos:]
+		s.pos = len(s.data)
+		return len(s.line) > 0
+	}
+
+	s.line = s.data[s.pos : s.pos+end]
+	s.pos += end + 1 // skip the \n
+	return true
+}
+
+func (s *lineScanner) Bytes() []byte {
+	return s.line
+}
+
+func (s *lineScanner) Err() error {
+	return s.err
 }
