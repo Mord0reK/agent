@@ -31,6 +31,10 @@ Standard monitoring stacks (node_exporter + cadvisor + Grafana Alloy) consume si
 | `node_filesystem_size_bytes{mountpoint,device,fstype}` | Filesystem size |
 | `node_filesystem_avail_bytes{mountpoint,device,fstype}` | Filesystem available space |
 | `node_filesystem_free_bytes{mountpoint,device,fstype}` | Filesystem free space |
+| `node_disk_read_bytes_total{device}` | Disk bytes read |
+| `node_disk_written_bytes_total{device}` | Disk bytes written |
+| `node_disk_reads_completed_total{device}` | Disk reads completed |
+| `node_disk_writes_completed_total{device}` | Disk writes completed |
 | `node_network_receive_bytes_total{device}` | Network bytes received |
 | `node_network_transmit_bytes_total{device}` | Network bytes transmitted |
 
