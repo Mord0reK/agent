@@ -1,6 +1,7 @@
 package collectors
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -25,8 +26,15 @@ func TestDiskCollectorCollect(t *testing.T) {
 		if m.Labels["hostname"] != "testhost" {
 			t.Errorf("expected hostname 'testhost', got %s", m.Labels["hostname"])
 		}
-		if m.Labels["mountpoint"] == "" {
-			t.Error("expected mountpoint label")
+		if strings.HasPrefix(m.Name, "node_filesystem_") {
+			if m.Labels["mountpoint"] == "" {
+				t.Errorf("expected mountpoint label for %s", m.Name)
+			}
+		}
+		if strings.HasPrefix(m.Name, "node_disk_") {
+			if m.Labels["device"] == "" {
+				t.Errorf("expected device label for %s", m.Name)
+			}
 		}
 	}
 }

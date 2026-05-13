@@ -24,8 +24,10 @@ func (c *DiskCollector) Collect() ([]Metric, error) {
 		return nil, err
 	}
 
+	ioCounters, ioErr := disk.IOCounters()
+
 	now := time.Now()
-	metrics := make([]Metric, 0, len(partitions)*3)
+	metrics := make([]Metric, 0, len(partitions)*3+len(ioCounters)*4)
 
 	for _, p := range partitions {
 		usage, err := disk.Usage(p.Mountpoint)
@@ -61,6 +63,47 @@ func (c *DiskCollector) Collect() ([]Metric, error) {
 				Timestamp: now,
 			},
 		)
+	}
+
+	if ioErr == nil {
+		for dev, st := range ioCounters {
+			if dev == "" {
+				continue
+			}
+
+			labels := map[string]string{
+				"hostname": c.hostname,
+				"instance": c.hostname,
+				"device":   dev,
+			}
+
+			metrics = append(metrics,
+				Metric{
+					Name:      "node_disk_read_bytes_total",
+					Labels:    labels,
+					Value:     float64(st.ReadBytes),
+					Timestamp: now,
+				},
+				Metric{
+					Name:      "node_disk_written_bytes_total",
+					Labels:    labels,
+					Value:     float64(st.WriteBytes),
+					Timestamp: now,
+				},
+				Metric{
+					Name:      "node_disk_reads_completed_total",
+					Labels:    labels,
+					Value:     float64(st.ReadCount),
+					Timestamp: now,
+				},
+				Metric{
+					Name:      "node_disk_writes_completed_total",
+					Labels:    labels,
+					Value:     float64(st.WriteCount),
+					Timestamp: now,
+				},
+			)
+		}
 	}
 
 	return metrics, nil
