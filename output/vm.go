@@ -17,13 +17,15 @@ type VMOutput struct {
 	vmURL      string
 	client     *http.Client
 	maxRetries int
+	sleep      func(time.Duration)
 }
 
 func NewVMOutput(vmURL string) *VMOutput {
 	return &VMOutput{
-		vmURL:      vmURL,
+		vmURL:      strings.TrimRight(vmURL, "/"),
 		client:     &http.Client{Timeout: 30 * time.Second},
 		maxRetries: 3,
+		sleep:      time.Sleep,
 	}
 }
 
@@ -62,6 +64,7 @@ func (v *VMOutput) Send(metrics []collectors.Metric) error {
 		body.WriteString(formatMetricPlaintext(m))
 		body.WriteString("\n")
 	}
+	payload := body.Bytes()
 
 	url := v.vmURL + "/api/v1/import/prometheus"
 
@@ -70,10 +73,17 @@ func (v *VMOutput) Send(metrics []collectors.Metric) error {
 		if attempt > 0 {
 			backoff := time.Duration(attempt*attempt) * time.Second
 			log.Printf("retry %d/%d after %v", attempt, v.maxRetries, backoff)
-			time.Sleep(backoff)
+			v.sleep(backoff)
 		}
 
-		resp, err := v.client.Post(url, "text/plain", &body)
+		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Content-Type", "text/plain")
+
+		resp, err := v.client.Do(req)
 		if err != nil {
 			lastErr = err
 			continue

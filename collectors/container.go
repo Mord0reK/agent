@@ -188,7 +188,7 @@ func (c *ContainerCollector) discoverContainers() {
 			cpuPath:        filepath.Join(match, "cpu.stat"),
 			memPath:        filepath.Join(match, "memory.current"),
 			ioPath:         filepath.Join(match, "io.stat"),
-			netDevPath:     fmt.Sprintf("/proc/%d/net/dev", firstPID(match)),
+			netDevPath:     netDevPath(match),
 		})
 	}
 
@@ -207,6 +207,14 @@ func firstPID(cgroupPath string) int {
 		}
 	}
 	return 0
+}
+
+func netDevPath(cgroupPath string) string {
+	pid := firstPID(cgroupPath)
+	if pid <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("/proc/%d/net/dev", pid)
 }
 
 type parsedConfig struct {
@@ -441,12 +449,22 @@ func (c *ContainerCollector) collectIO(cg *containerCgroup, now time.Time) ([]Me
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
 		parts := strings.Fields(scanner.Text())
-		if len(parts) >= 3 {
-			switch parts[0] {
+		// cgroup v2 io.stat format:
+		// <major>:<minor> rbytes=<n> wbytes=<n> rios=<n> wios=<n> ...
+		for _, field := range parts {
+			k, v, ok := strings.Cut(field, "=")
+			if !ok {
+				continue
+			}
+			val, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				continue
+			}
+			switch k {
 			case "rbytes":
-				rBytes, _ = strconv.ParseUint(parts[1], 10, 64)
+				rBytes += val
 			case "wbytes":
-				wBytes, _ = strconv.ParseUint(parts[1], 10, 64)
+				wBytes += val
 			}
 		}
 	}
