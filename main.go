@@ -1,7 +1,8 @@
 package main
 
 import (
-	"log"
+	"log/slog"
+	"os"
 	"time"
 
 	"vm-slim-agent/collectors"
@@ -10,12 +11,15 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	cfg, err := LoadConfig()
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		slog.Error("Failed to load config", "error", err)
+		os.Exit(1)
 	}
 
-	log.Printf("Starting VM Agent (interval=%s, vm_url=%s)", cfg.ScrapeInterval, cfg.VMURL)
+	slog.Info("Starting VM Agent", "interval", cfg.ScrapeInterval, "vm_url", cfg.VMURL)
 
 	cs := []collectors.Collector{
 		collectors.NewCPUCollector(cfg.Hostname),
@@ -33,7 +37,8 @@ func main() {
 
 	if cfg.Logs != nil {
 		if cfg.LogsBackendURL == "" {
-			log.Fatalf("LOGS_BACKEND_URL environment variable is required when LOGS_CONFIG_FILE is set")
+			slog.Error("LOGS_BACKEND_URL environment variable is required when LOGS_CONFIG_FILE is set")
+			os.Exit(1)
 		}
 
 		logsOut = output.NewVLogsOutput(cfg.LogsBackendURL)
@@ -46,7 +51,7 @@ func main() {
 		}
 
 		if len(logCollectors) > 0 {
-			log.Printf("Logs enabled (%d sources, backend=%s, state_dir=%s)", len(logCollectors), cfg.LogsBackendURL, cfg.LogsStateDir)
+			slog.Info("Logs enabled", "sources", len(logCollectors), "backend", cfg.LogsBackendURL, "state_dir", cfg.LogsStateDir)
 		}
 	}
 
@@ -59,21 +64,21 @@ func main() {
 		for _, c := range cs {
 			metrics, err := c.Collect()
 			if err != nil {
-				log.Printf("Error collecting from %s: %v", c.Name(), err)
+				slog.Error("Error collecting metrics", "collector", c.Name(), "error", err)
 				continue
 			}
 			allMetrics = append(allMetrics, metrics...)
 		}
 
 		if len(allMetrics) == 0 {
-			log.Println("No metrics collected")
+			slog.Debug("No metrics collected")
 			continue
 		}
 
 		if err := vmOut.Send(allMetrics); err != nil {
-			log.Printf("Error sending metrics: %v", err)
+			slog.Error("Error sending metrics", "error", err)
 		} else {
-			log.Printf("Sent %d metrics", len(allMetrics))
+			slog.Info("Sent metrics", "count", len(allMetrics))
 		}
 
 		if logsOut != nil && len(logCollectors) > 0 {
@@ -81,7 +86,7 @@ func main() {
 			for _, c := range logCollectors {
 				entries, err := c.Collect()
 				if err != nil {
-					log.Printf("Error collecting logs from %s: %v", c.Name(), err)
+					slog.Error("Error collecting logs", "collector", c.Name(), "error", err)
 					continue
 				}
 				allLogs = append(allLogs, entries...)
@@ -89,9 +94,9 @@ func main() {
 
 			if len(allLogs) > 0 {
 				if err := logsOut.Send(allLogs); err != nil {
-					log.Printf("Error sending logs: %v", err)
+					slog.Error("Error sending logs", "error", err)
 				} else {
-					log.Printf("Sent %d logs", len(allLogs))
+					slog.Info("Sent logs", "count", len(allLogs))
 				}
 			}
 		}

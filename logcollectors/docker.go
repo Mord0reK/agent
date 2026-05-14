@@ -208,10 +208,10 @@ func (c *DockerCollector) Collect() ([]Entry, error) {
 					"hostname":  c.hostname,
 					"container": cs.name,
 					"source":    "docker",
+					"level":     extractLevel(msg),
 				},
 				Fields: map[string]string{
-					"container_id": cs.id,
-					"stream":       line.Stream,
+					"stream": line.Stream,
 				},
 			})
 		}
@@ -268,4 +268,36 @@ func (s *lineScanner) Bytes() []byte {
 
 func (s *lineScanner) Err() error {
 	return s.err
+}
+
+// extractLevel attempts to determine the log level from a message string.
+// If the message is JSON, it looks for known level keys.
+// Otherwise, it falls back to keyword matching on the lowercase message.
+func extractLevel(msg string) string {
+	if strings.HasPrefix(msg, "{") {
+		var fields map[string]interface{}
+		if err := json.Unmarshal([]byte(msg), &fields); err == nil {
+			for _, key := range []string{"level", "severity", "lvl", "loglevel"} {
+				if v, ok := fields[key]; ok {
+					if s, ok := v.(string); ok {
+						return strings.ToLower(s)
+					}
+				}
+			}
+		}
+	}
+
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "error") || strings.Contains(lower, "err="):
+		return "error"
+	case strings.Contains(lower, "warn"):
+		return "warn"
+	case strings.Contains(lower, "debug"):
+		return "debug"
+	case strings.Contains(lower, "info"):
+		return "info"
+	default:
+		return "unknown"
+	}
 }

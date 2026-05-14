@@ -73,9 +73,10 @@ func (c *JournaldCollector) Collect() ([]Entry, error) {
 			continue
 		}
 		var e struct {
-			Message string `json:"MESSAGE"`
-			Time    string `json:"__REALTIME_TIMESTAMP"`
-			Cursor  string `json:"__CURSOR"`
+			Message  string `json:"MESSAGE"`
+			Time     string `json:"__REALTIME_TIMESTAMP"`
+			Cursor   string `json:"__CURSOR"`
+			Priority string `json:"PRIORITY"`
 		}
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
 			continue
@@ -89,6 +90,9 @@ func (c *JournaldCollector) Collect() ([]Entry, error) {
 		if e.Message == "" {
 			continue
 		}
+
+		level := priorityToLevel(e.Priority)
+
 		entries = append(entries, Entry{
 			Timestamp: ts,
 			Message:   e.Message,
@@ -97,6 +101,7 @@ func (c *JournaldCollector) Collect() ([]Entry, error) {
 				"hostname": c.hostname,
 				"unit":     c.unit,
 				"source":   "journald",
+				"level":    level,
 			},
 			Fields: map[string]string{
 				"unit":   c.unit,
@@ -116,4 +121,29 @@ func sanitizeFileName(s string) string {
 
 func parseJournalTime(v string) (int64, error) {
 	return strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+}
+
+// priorityToLevel maps journald PRIORITY values to log levels.
+// syslog priorities: 0=emerg,1=alert,2=crit → error, 3=err,4=warning → warn,
+// 5=notice,6=info → info, 7=debug → debug.
+func priorityToLevel(p string) string {
+	if p == "" {
+		return "unknown"
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil {
+		return "unknown"
+	}
+	switch {
+	case n <= 2:
+		return "error"
+	case n <= 4:
+		return "warn"
+	case n <= 6:
+		return "info"
+	case n == 7:
+		return "debug"
+	default:
+		return "unknown"
+	}
 }

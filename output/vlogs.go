@@ -46,11 +46,20 @@ func (o *VLogsOutput) Send(entries []logcollectors.Entry) error {
 
 	grouped := map[string]*lokiStream{}
 	for _, e := range entries {
-		key := labelsKey(e.Labels)
+		// Merge Labels and Fields into one label set for Loki streams
+		allLabels := make(map[string]string, len(e.Labels)+len(e.Fields))
+		for k, v := range e.Labels {
+			allLabels[k] = v
+		}
+		for k, v := range e.Fields {
+			allLabels[k] = v
+		}
+
+		key := labelsKey(allLabels)
 		stream := grouped[key]
 		if stream == nil {
-			copyLabels := make(map[string]string, len(e.Labels))
-			for k, v := range e.Labels {
+			copyLabels := make(map[string]string, len(allLabels))
+			for k, v := range allLabels {
 				copyLabels[k] = v
 			}
 			stream = &lokiStream{Stream: copyLabels}
