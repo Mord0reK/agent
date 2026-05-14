@@ -11,7 +11,14 @@ import (
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.MessageKey {
+				a.Key = "_msg"
+			}
+			return a
+		},
+	})))
 
 	cfg, err := LoadConfig()
 	if err != nil {
