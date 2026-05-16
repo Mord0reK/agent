@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"vm-slim-agent/collectors"
@@ -65,47 +68,56 @@ func main() {
 	ticker := time.NewTicker(cfg.ScrapeInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		var allMetrics []collectors.Metric
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
 
-		for _, c := range cs {
-			metrics, err := c.Collect()
-			if err != nil {
-				slog.Error("Error collecting metrics", "collector", c.Name(), "error", err)
-				continue
-			}
-			allMetrics = append(allMetrics, metrics...)
-		}
+	for {
+		select {
+		case <-ticker.C:
+			var allMetrics []collectors.Metric
 
-		if len(allMetrics) == 0 {
-			slog.Debug("No metrics collected")
-			continue
-		}
-
-		if err := vmOut.Send(allMetrics); err != nil {
-			slog.Error("Error sending metrics", "error", err)
-		} else {
-			slog.Info("Sent metrics", "count", len(allMetrics))
-		}
-
-		if logsOut != nil && len(logCollectors) > 0 {
-			var allLogs []logcollectors.Entry
-			for _, c := range logCollectors {
-				entries, err := c.Collect()
+			for _, c := range cs {
+				metrics, err := c.Collect()
 				if err != nil {
-					slog.Error("Error collecting logs", "collector", c.Name(), "error", err)
+					slog.Error("Error collecting metrics", "collector", c.Name(), "error", err)
 					continue
 				}
-				allLogs = append(allLogs, entries...)
+				allMetrics = append(allMetrics, metrics...)
 			}
 
-			if len(allLogs) > 0 {
-				if err := logsOut.Send(allLogs); err != nil {
-					slog.Error("Error sending logs", "error", err)
-				} else {
-					slog.Info("Sent logs", "count", len(allLogs))
+			if len(allMetrics) == 0 {
+				slog.Debug("No metrics collected")
+				continue
+			}
+
+			if err := vmOut.Send(allMetrics); err != nil {
+				slog.Error("Error sending metrics", "error", err)
+			} else {
+				slog.Info("Sent metrics", "count", len(allMetrics))
+			}
+
+			if logsOut != nil && len(logCollectors) > 0 {
+				var allLogs []logcollectors.Entry
+				for _, c := range logCollectors {
+					entries, err := c.Collect()
+					if err != nil {
+						slog.Error("Error collecting logs", "collector", c.Name(), "error", err)
+						continue
+					}
+					allLogs = append(allLogs, entries...)
+				}
+
+				if len(allLogs) > 0 {
+					if err := logsOut.Send(allLogs); err != nil {
+						slog.Error("Error sending logs", "error", err)
+					} else {
+						slog.Info("Sent logs", "count", len(allLogs))
+					}
 				}
 			}
+		case <-ctx.Done():
+			slog.Info("Shutting down")
+			return
 		}
 	}
 }

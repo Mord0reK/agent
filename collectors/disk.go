@@ -1,6 +1,7 @@
 package collectors
 
 import (
+	"syscall"
 	"time"
 
 	"github.com/shirou/gopsutil/v3/disk"
@@ -43,6 +44,17 @@ func (c *DiskCollector) Collect() ([]Metric, error) {
 			"fstype":     p.Fstype,
 		}
 
+		// Use syscall.Statfs for accurate avail/free bytes.
+		// Bavail = blocks available to non-root users (avail_bytes)
+		// Bfree  = blocks free to root (free_bytes)
+		var stat syscall.Statfs_t
+		avail := float64(usage.Free)
+		free := float64(usage.Free)
+		if err := syscall.Statfs(p.Mountpoint, &stat); err == nil {
+			avail = float64(stat.Bavail) * float64(stat.Bsize)
+			free = float64(stat.Bfree) * float64(stat.Bsize)
+		}
+
 		metrics = append(metrics,
 			Metric{
 				Name:      "node_filesystem_size_bytes",
@@ -53,13 +65,13 @@ func (c *DiskCollector) Collect() ([]Metric, error) {
 			Metric{
 				Name:      "node_filesystem_avail_bytes",
 				Labels:    labels,
-				Value:     float64(usage.Free),
+				Value:     avail,
 				Timestamp: now,
 			},
 			Metric{
 				Name:      "node_filesystem_free_bytes",
 				Labels:    labels,
-				Value:     float64(usage.Free),
+				Value:     free,
 				Timestamp: now,
 			},
 		)

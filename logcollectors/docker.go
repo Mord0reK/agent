@@ -18,10 +18,11 @@ type containerState struct {
 }
 
 type DockerCollector struct {
-	hostname   string
-	pattern    string
-	containers map[string]*containerState
-	resolved   bool
+	hostname      string
+	pattern       string
+	containers    map[string]*containerState
+	resolved      bool
+	lastResolved  time.Time
 }
 
 type dockerJSONLine struct {
@@ -46,7 +47,7 @@ func isWildcard(pattern string) bool {
 }
 
 func (c *DockerCollector) resolve() error {
-	if c.resolved {
+	if c.resolved && time.Since(c.lastResolved) < 60*time.Second {
 		return nil
 	}
 
@@ -107,6 +108,7 @@ func (c *DockerCollector) resolve() error {
 	}
 
 	c.resolved = true
+	c.lastResolved = time.Now()
 	return nil
 }
 

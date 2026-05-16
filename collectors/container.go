@@ -25,6 +25,7 @@ type containerCgroup struct {
 	running        bool
 	cpuPath        string
 	memPath        string
+	memStatPath    string
 	ioPath         string
 	netDevPath     string
 	hostNetwork    bool
@@ -187,6 +188,7 @@ func (c *ContainerCollector) discoverContainers() {
 			composeService: cfg.composeService,
 			cpuPath:        filepath.Join(match, "cpu.stat"),
 			memPath:        filepath.Join(match, "memory.current"),
+			memStatPath:    filepath.Join(match, "memory.stat"),
 			ioPath:         filepath.Join(match, "io.stat"),
 			netDevPath:     netDevPath(match),
 		})
@@ -410,9 +412,16 @@ func (c *ContainerCollector) collectMemory(cg *containerCgroup, now time.Time) (
 	}
 
 	content := strings.TrimSpace(string(data))
-	val, err := strconv.ParseUint(content, 10, 64)
+	current, err := strconv.ParseUint(content, 10, 64)
 	if err != nil {
 		return nil, err
+	}
+
+	// Subtract inactive_file from memory.current to get working set memory.
+	// This matches cadvisor's container_memory_usage_bytes behavior.
+	inactiveFile := readMemStat(cg.memStatPath, "inactive_file")
+	if inactiveFile < current {
+		current -= inactiveFile
 	}
 
 	labels := map[string]string{
@@ -433,10 +442,30 @@ func (c *ContainerCollector) collectMemory(cg *containerCgroup, now time.Time) (
 		{
 			Name:      "container_memory_usage_bytes",
 			Labels:    labels,
-			Value:     float64(val),
+			Value:     float64(current),
 			Timestamp: now,
 		},
 	}, nil
+}
+
+// readMemStat reads a single key from a cgroup memory.stat file.
+// Returns 0 if the file cannot be read or the key is not found.
+func readMemStat(path, key string) uint64 {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		parts := strings.Fields(scanner.Text())
+		if len(parts) == 2 && parts[0] == key {
+			val, err := strconv.ParseUint(parts[1], 10, 64)
+			if err == nil {
+				return val
+			}
+		}
+	}
+	return 0
 }
 
 func (c *ContainerCollector) collectIO(cg *containerCgroup, now time.Time) ([]Metric, error) {
